@@ -53,6 +53,52 @@ jobs:
             | grep "SHA256:" | sed 's/.*SHA256:/SHA256:/'
           echo "══════════════════════════════════════"
 
+      - name: Prepare icon (download hoặc tạo placeholder)
+        run: |
+          mkdir -p /tmp/iconserver
+
+          # Lấy URL icon hiện tại từ manifest (trước khi patch host)
+          ICON_URL=$(python3 -c "
+          import json
+          with open('twa-manifest.json') as f:
+              m = json.load(f)
+          icons = m.get('icons', [])
+          url = next((i['src'] for i in icons if '512' in i.get('sizes','')),
+                     next((i['src'] for i in icons), ''))
+          print(url)
+          " 2>/dev/null || echo "")
+
+          echo "Icon URL gốc: $ICON_URL"
+
+          if [ -n "$ICON_URL" ] && curl -sf --connect-timeout 8 --max-time 15 "$ICON_URL" -o /tmp/iconserver/icon-512.png 2>/dev/null; then
+            echo "Icon tải thành công từ URL gốc"
+          else
+            echo "Tunnel không khả dụng — tạo icon placeholder..."
+            python3 -c "
+          import struct, zlib
+
+          def make_png(w, h, r, g, b):
+              raw = b''.join(bytes([0]) + bytes([r, g, b] * w) for _ in range(h))
+              def chunk(tag, data):
+                  crc = zlib.crc32(tag + data) & 0xffffffff
+                  return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', crc)
+              ihdr = chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+              idat = chunk(b'IDAT', zlib.compress(raw, 1))
+              iend = chunk(b'IEND', b'')
+              return b'\x89PNG\r\n\x1a\n' + ihdr + idat + iend
+
+          with open('/tmp/iconserver/icon-512.png', 'wb') as f:
+              f.write(make_png(512, 512, 79, 70, 229))
+          print('Placeholder icon created (512x512 purple)')
+          "
+          fi
+
+          # Khởi động HTTP server local để serve icon
+          cd /tmp/iconserver
+          python3 -m http.server 8899 &
+          sleep 2
+          echo "Icon server status: $(curl -s -o /dev/null -w '%{http_code}' http://localhost:8899/icon-512.png)"
+
       - name: Patch twa-manifest.json
         run: |
           python3 - << 'EOF'
@@ -69,11 +115,20 @@ jobs:
           m['appVersionName'] = '1.0.0'
           if 'startUrl' not in m:
               m['startUrl'] = m.get('launchUrl', '/')
+
+          # Patch icon URLs → local server (tránh lỗi 503 từ tunnel cũ)
+          for icon in m.get('icons', []):
+              icon['src'] = 'http://localhost:8899/icon-512.png'
+          for shortcut in m.get('shortcuts', []):
+              for icon in shortcut.get('icons', []):
+                  icon['src'] = 'http://localhost:8899/icon-512.png'
+
           with open('twa-manifest.json', 'w') as f:
               json.dump(m, f, indent=2)
           print(f"host: {host}")
           print(f"startUrl: {m['startUrl']}")
           print(f"version: {m['appVersionName']} ({m['appVersionCode']})")
+          print(f"icons: patched to local server")
           EOF
 
       - name: Write build script
@@ -90,49 +145,46 @@ jobs:
           child.logfile = sys.stdout
 
           PATTERNS = [
-              'regenerate',           # 0  — hỏi có tạo lại project không
-              r'\[Y/n\]',             # 1  — yes/no dạng 1
-              r'\(Y/n\)',              # 2  — yes/no dạng 2
-              r'\(y/N\)',              # 3  — yes/no dạng 3 (default No)
-              'Key Store Location',   # 4
-              'Key Store Password',   # 5
-              'Key Alias',            # 6
-              'Key Password',         # 7
-              r'[Vv]ersion[Nn]ame',   # 8  — hỏi version name mới
-              r'[Vv]ersion[Cc]ode',   # 9  — hỏi version code mới
-              'BUILD SUCCESSFUL',     # 10
-              'BUILD FAILED',         # 11
-              pexpect.EOF,            # 12
-              pexpect.TIMEOUT,        # 13
+              'regenerate',
+              r'\[Y/n\]',
+              r'\(Y/n\)',
+              r'\(y/N\)',
+              'Key Store Location',
+              'Key Store Password',
+              'Key Alias',
+              'Key Password',
+              r'[Vv]ersion[Nn]ame',
+              r'[Vv]ersion[Cc]ode',
+              'BUILD SUCCESSFUL',
+              'BUILD FAILED',
+              pexpect.EOF,
+              pexpect.TIMEOUT,
           ]
 
-          # Phase 1: Trả lời các prompt (60s mỗi prompt)
           print('\n[Phase 1: answering prompts]\n', flush=True)
           while True:
               i = child.expect(PATTERNS, timeout=60)
               print(f'\n[match:{i}]\n', flush=True)
 
-              if   i == 0: child.sendline('y')   # regenerate → yes
-              elif i == 1: child.sendline('y')   # [Y/n] → yes
-              elif i == 2: child.sendline('y')   # (Y/n) → yes
-              elif i == 3: child.sendline('n')   # (y/N) → no (giữ nguyên)
-              elif i == 4: child.sendline(KS)    # keystore path
-              elif i == 5: child.sendline('android')  # store password
-              elif i == 6: child.sendline('android')  # key alias
-              elif i == 7: child.sendline('android')  # key password
-              elif i == 8: child.sendline('1.0.0') # versionName → giữ 1.0.0
-              elif i == 9: child.sendline('1')    # versionCode → giữ 1
+              if   i == 0: child.sendline('y')
+              elif i == 1: child.sendline('y')
+              elif i == 2: child.sendline('y')
+              elif i == 3: child.sendline('n')
+              elif i == 4: child.sendline(KS)
+              elif i == 5: child.sendline('android')
+              elif i == 6: child.sendline('android')
+              elif i == 7: child.sendline('android')
+              elif i == 8: child.sendline('1.0.0')
+              elif i == 9: child.sendline('1')
               elif i == 10:
-                  print('✅ BUILD SUCCESSFUL (phase 1)', flush=True); break
+                  print('BUILD SUCCESSFUL (phase 1)', flush=True); break
               elif i == 11:
-                  print('❌ BUILD FAILED (phase 1)', flush=True); break
+                  print('BUILD FAILED (phase 1)', flush=True); break
               elif i == 12:
                   print('EOF received', flush=True); break
               elif i == 13:
-                  # Timeout → Gradle đã bắt đầu chạy → chuyển phase 2
-                  print('[→ switching to Phase 2]', flush=True); break
+                  print('[switching to Phase 2]', flush=True); break
 
-          # Phase 2: Chờ Gradle build xong (tối đa 10 phút)
           if child.isalive():
               print('\n[Phase 2: waiting for Gradle, max 10 min]\n', flush=True)
               try:
@@ -140,16 +192,15 @@ jobs:
                       ['BUILD SUCCESSFUL', 'BUILD FAILED', pexpect.EOF],
                       timeout=600
                   )
-                  labels = ['✅ BUILD SUCCESSFUL', '❌ BUILD FAILED', 'EOF']
+                  labels = ['BUILD SUCCESSFUL', 'BUILD FAILED', 'EOF']
                   print(labels[idx], flush=True)
               except pexpect.TIMEOUT:
-                  print('❌ Gradle timeout sau 10 phút', flush=True)
+                  print('Gradle timeout', flush=True)
                   child.terminate(force=True)
 
           child.close()
           rc = child.exitstatus
           if rc is None:
-              print('Process was killed', flush=True)
               rc = 1
           print(f'\nExit code: {rc}\n', flush=True)
           sys.exit(rc)
@@ -159,9 +210,7 @@ jobs:
         run: |
           pip install pexpect --break-system-packages
           for attempt in 1 2 3; do
-            echo "═══════════════════════════"
-            echo "  Attempt $attempt / 3"
-            echo "═══════════════════════════"
+            echo "Attempt $attempt / 3"
             python3 build.py && break
             if [ $attempt -lt 3 ]; then
               echo "Thất bại, thử lại sau 30s..."
@@ -178,11 +227,9 @@ jobs:
           echo "=== Tìm APK ==="
           find . -name "*.apk" 2>/dev/null | tee /tmp/apk_list.txt
           if [ -s /tmp/apk_list.txt ]; then
-            echo "✅ Tìm thấy APK!"
+            echo "Tìm thấy APK!"
           else
-            echo "❌ Không thấy APK"
-            echo ""
-            echo "=== Thư mục sau build ==="
+            echo "Không thấy APK"
             find . -name "gradlew" -o -name "*.aab" 2>/dev/null | head -20
             ls -la app/build/outputs/ 2>/dev/null || true
           fi
