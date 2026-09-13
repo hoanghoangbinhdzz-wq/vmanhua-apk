@@ -4,17 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      tunnel_url:
-        description: 'URL tunnel (không có https://)'
-        required: false
-        default: 'placeholder.trycloudflare.com'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      TUNNEL_URL: ${{ secrets.TUNNEL_URL || github.event.inputs.tunnel_url || 'placeholder.trycloudflare.com' }}
+      TUNNEL_URL: ${{ secrets.TUNNEL_URL || 'placeholder.trycloudflare.com' }}
 
     steps:
       - uses: actions/checkout@v3
@@ -57,7 +52,6 @@ jobs:
         run: |
           mkdir -p /tmp/iconserver
 
-          # ── 1. Tải icon thật hoặc tạo placeholder ──
           ICON_URL=$(python3 -c "
           import json
           with open('twa-manifest.json') as f:
@@ -91,8 +85,7 @@ jobs:
           "
           fi
 
-          # ── 2. Tạo manifest.json từ dữ liệu trong twa-manifest ──
-          python3 - << 'EOF'
+          python3 - << 'PYEOF'
           import json
 
           with open('twa-manifest.json') as f:
@@ -120,17 +113,15 @@ jobs:
 
           print("Web manifest created:")
           print(json.dumps(web_manifest, indent=2))
-          EOF
+          PYEOF
 
-          # ── 3. Khởi động local HTTP server ──
           cd /tmp/iconserver && python3 -m http.server 8899 &
           sleep 2
           echo "=== Kiểm tra local server ==="
           curl -s -o /dev/null -w "icon: %{http_code}\n"    http://localhost:8899/icon-512.png
           curl -s -o /dev/null -w "manifest: %{http_code}\n" http://localhost:8899/manifest.json
 
-          # ── 4. Patch toàn bộ twa-manifest.json ──
-          python3 - << 'EOF'
+          python3 - << 'PYEOF'
           import json, os
 
           ks   = os.environ['GITHUB_WORKSPACE'] + '/android.keystore'
@@ -141,11 +132,12 @@ jobs:
           with open('twa-manifest.json') as f:
               m = json.load(f)
 
-          m['host']           = host
-          m['fullScopeUrl']   = f'https://{host}/'
-          m['signingKey']     = {'path': ks, 'alias': 'android'}
-          m['appVersionCode'] = 1
-          m['appVersionName'] = '1.0.0'
+          m['host']                = host
+          m['fullScopeUrl']        = f'https://{host}/'
+          m['signingKey']          = {'path': ks, 'alias': 'android'}
+          m['appVersionCode']      = 1
+          m['appVersionName']      = '1.0.0'
+          m['enableNotifications'] = False   # FIX: missing → Groovy syntax error
           if 'startUrl' not in m:
               m['startUrl'] = m.get('launchUrl', '/')
 
@@ -169,7 +161,7 @@ jobs:
           print(f"webManifestUrl: {LOCAL_MANIFEST}")
           print(f"iconUrl:        {LOCAL_ICON}")
           print("Patch hoàn tất")
-          EOF
+          PYEOF
 
       - name: Write build script
         run: |
@@ -182,66 +174,40 @@ jobs:
               'bubblewrap build --skipPwaValidation',
               timeout=60, encoding='utf-8'
           )
-          child.logfile = sys.stdout
+          # Log only what child sends, not what we send — avoids echo spam
+          child.logfile_read = sys.stdout
 
-          PATTERNS = [
-              'regenerate',
-              r'\[Y/n\]',
-              r'\(Y/n\)',
-              r'\(y/N\)',
-              'Key Store Location',
-              'Password for the Key Store',   # FIX: was 'Key Store Password'
-              'Key Alias',
-              'Key Password',
-              r'[Vv]ersion[Nn]ame',
-              r'[Vv]ersion[Cc]ode',
-              'BUILD SUCCESSFUL',
-              'BUILD FAILED',
-              pexpect.EOF,
-              pexpect.TIMEOUT,
-          ]
+          def send(prompt_pattern, response, label=''):
+              print(f'\n[waiting: {label or prompt_pattern}]', flush=True)
+              child.expect(prompt_pattern, timeout=60)
+              print(f'[matched] → sending: {response!r}', flush=True)
+              child.sendline(response)
 
-          print('\n[Phase 1: answering prompts]\n', flush=True)
-          while True:
-              i = child.expect(PATTERNS, timeout=60)
-              print(f'\n[match:{i}]\n', flush=True)
+          print('\n[Phase 1: answering prompts — sequential]\n', flush=True)
 
-              if   i == 0: child.sendline('y')
-              elif i == 1: child.sendline('y')
-              elif i == 2: child.sendline('y')
-              elif i == 3: child.sendline('n')
-              elif i == 4: child.sendline(KS)
-              elif i == 5: child.sendline('android')
-              elif i == 6: child.sendline('android')
-              elif i == 7: child.sendline('android')
-              elif i == 8: child.sendline('1.0.0')
-              elif i == 9: child.sendline('1')
-              elif i == 10:
-                  print('BUILD SUCCESSFUL (phase 1)', flush=True); break
-              elif i == 11:
-                  print('BUILD FAILED (phase 1)', flush=True); break
-              elif i == 12:
-                  print('EOF received', flush=True); break
-              elif i == 13:
-                  print('[switching to Phase 2]', flush=True); break
+          # Sequential: each prompt fires exactly once, no re-match possible
+          send('regenerate',                 'y',       'regenerate?')
+          send('Key Store Location',         KS,        'keystore path')
+          send('Password for the Key Store', 'android', 'keystore pass')
+          send('Key Alias',                  'android', 'key alias')
+          send('Key Password',               'android', 'key pass')
+          send(r'[Vv]ersion[Nn]ame',         '1.0.0',   'version name')
+          send(r'[Vv]ersion[Cc]ode',         '1',       'version code')
 
-          if child.isalive():
-              print('\n[Phase 2: waiting for Gradle, max 10 min]\n', flush=True)
-              try:
-                  idx = child.expect(
-                      ['BUILD SUCCESSFUL', 'BUILD FAILED', pexpect.EOF],
-                      timeout=600
-                  )
-                  labels = ['BUILD SUCCESSFUL', 'BUILD FAILED', 'EOF']
-                  print(labels[idx], flush=True)
-              except pexpect.TIMEOUT:
-                  print('Gradle timeout', flush=True)
-                  child.terminate(force=True)
+          print('\n[Phase 2: waiting for Gradle, max 10 min]\n', flush=True)
+          try:
+              idx = child.expect(
+                  ['BUILD SUCCESSFUL', 'BUILD FAILED', pexpect.EOF],
+                  timeout=600
+              )
+              labels = ['BUILD SUCCESSFUL', 'BUILD FAILED', 'EOF']
+              print(f'\n{labels[idx]}\n', flush=True)
+          except pexpect.TIMEOUT:
+              print('Gradle timeout', flush=True)
+              child.terminate(force=True)
 
           child.close()
-          rc = child.exitstatus
-          if rc is None:
-              rc = 1
+          rc = child.exitstatus if child.exitstatus is not None else 1
           print(f'\nExit code: {rc}\n', flush=True)
           sys.exit(rc)
           PYEOF
