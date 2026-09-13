@@ -53,30 +53,30 @@ jobs:
             | grep "SHA256:" | sed 's/.*SHA256:/SHA256:/'
           echo "══════════════════════════════════════"
 
-      - name: Prepare icon (download hoặc tạo placeholder)
+      - name: Prepare icon + patch manifest
         run: |
           mkdir -p /tmp/iconserver
 
-          # Lấy URL icon hiện tại từ manifest (trước khi patch host)
+          # Lấy icon URL gốc từ manifest (ưu tiên iconUrl top-level)
           ICON_URL=$(python3 -c "
           import json
           with open('twa-manifest.json') as f:
               m = json.load(f)
-          icons = m.get('icons', [])
-          url = next((i['src'] for i in icons if '512' in i.get('sizes','')),
-                     next((i['src'] for i in icons), ''))
+          url = (m.get('iconUrl')
+              or m.get('maskableIconUrl')
+              or next((i['src'] for i in m.get('icons', [])), ''))
           print(url)
           " 2>/dev/null || echo "")
 
           echo "Icon URL gốc: $ICON_URL"
 
+          # Thử tải icon thật, nếu không được thì tạo placeholder
           if [ -n "$ICON_URL" ] && curl -sf --connect-timeout 8 --max-time 15 "$ICON_URL" -o /tmp/iconserver/icon-512.png 2>/dev/null; then
-            echo "Icon tải thành công từ URL gốc"
+            echo "Icon tải thành công"
           else
-            echo "Tunnel không khả dụng — tạo icon placeholder..."
+            echo "Tunnel offline — tạo icon placeholder 512x512..."
             python3 -c "
           import struct, zlib
-
           def make_png(w, h, r, g, b):
               raw = b''.join(bytes([0]) + bytes([r, g, b] * w) for _ in range(h))
               def chunk(tag, data):
@@ -86,27 +86,28 @@ jobs:
               idat = chunk(b'IDAT', zlib.compress(raw, 1))
               iend = chunk(b'IEND', b'')
               return b'\x89PNG\r\n\x1a\n' + ihdr + idat + iend
-
           with open('/tmp/iconserver/icon-512.png', 'wb') as f:
               f.write(make_png(512, 512, 79, 70, 229))
-          print('Placeholder icon created (512x512 purple)')
+          print('Placeholder icon created')
           "
           fi
 
-          # Khởi động HTTP server local để serve icon
-          cd /tmp/iconserver
-          python3 -m http.server 8899 &
+          # Khởi động HTTP server local
+          cd /tmp/iconserver && python3 -m http.server 8899 &
           sleep 2
-          echo "Icon server status: $(curl -s -o /dev/null -w '%{http_code}' http://localhost:8899/icon-512.png)"
+          echo "Icon server: $(curl -s -o /dev/null -w '%{http_code}' http://localhost:8899/icon-512.png)"
 
-      - name: Patch twa-manifest.json
-        run: |
+          # Patch toàn bộ manifest
           python3 - << 'EOF'
           import json, os
           ks   = os.environ['GITHUB_WORKSPACE'] + '/android.keystore'
           host = os.environ.get('TUNNEL_URL', 'placeholder.trycloudflare.com')
+          LOCAL_ICON = 'http://localhost:8899/icon-512.png'
+
           with open('twa-manifest.json') as f:
               m = json.load(f)
+
+          # Patch host / URLs
           m['host']           = host
           m['webManifestUrl'] = f'https://{host}/manifest.json'
           m['fullScopeUrl']   = f'https://{host}/'
@@ -116,19 +117,25 @@ jobs:
           if 'startUrl' not in m:
               m['startUrl'] = m.get('launchUrl', '/')
 
-          # Patch icon URLs → local server (tránh lỗi 503 từ tunnel cũ)
+          # Patch TẤT CẢ icon fields (top-level + array)
+          for key in ['iconUrl', 'maskableIconUrl', 'monochromeIconUrl']:
+              if key in m:
+                  print(f"Patching {key}: {m[key]} -> {LOCAL_ICON}")
+                  m[key] = LOCAL_ICON
+
           for icon in m.get('icons', []):
-              icon['src'] = 'http://localhost:8899/icon-512.png'
+              icon['src'] = LOCAL_ICON
+
           for shortcut in m.get('shortcuts', []):
               for icon in shortcut.get('icons', []):
-                  icon['src'] = 'http://localhost:8899/icon-512.png'
+                  icon['src'] = LOCAL_ICON
 
           with open('twa-manifest.json', 'w') as f:
               json.dump(m, f, indent=2)
+
           print(f"host: {host}")
           print(f"startUrl: {m['startUrl']}")
-          print(f"version: {m['appVersionName']} ({m['appVersionCode']})")
-          print(f"icons: patched to local server")
+          print(f"All icon URLs patched to: {LOCAL_ICON}")
           EOF
 
       - name: Write build script
