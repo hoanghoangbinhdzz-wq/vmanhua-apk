@@ -22,11 +22,17 @@ jobs:
       - name: Install Bubblewrap
         run: npm install -g @bubblewrap/cli
 
+      - name: Configure Bubblewrap
+        run: |
+          mkdir -p ~/.bubblewrap
+          printf '{"jdkPath":"%s","androidSdkPath":"%s"}\n' \
+            "$JAVA_HOME" "$ANDROID_SDK_ROOT" > ~/.bubblewrap/config.json
+
       - name: Build APK
-        run: printf "N\nN\nN\n${JAVA_HOME}\n" | bubblewrap build --skipPwaValidation
+        run: bubblewrap build --skipPwaValidation
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: vmanhua-apk
-          path: "*.apk"
+          path: app/build/outputs/apk/release/*.apk
