@@ -14,3 +14,8 @@ jobs:
           distribution: 'temurin'
       - run: npm install -g @bubblewrap/cli
       - run: echo "N" | bubblewrap init --manifest https://c83ab48eabfa07.lhr.life/static/manifest.json
+      - run: echo "N" | bubblewrap build --skipPwaValidation
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vmanhua-apk
+          path: "*.apk"
