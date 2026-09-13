@@ -28,8 +28,18 @@ jobs:
           printf '{"jdkPath":"%s","androidSdkPath":"%s"}\n' \
             "$JAVA_HOME" "$ANDROID_SDK_ROOT" > ~/.bubblewrap/config.json
 
+      - name: Generate Keystore
+        run: |
+          keytool -genkeypair -v \
+            -keystore android.keystore \
+            -alias android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=VManhua,O=VManhua,C=VN" \
+            -storepass android \
+            -keypass android
+
       - name: Build APK
-        run: echo "n" | bubblewrap build --skipPwaValidation
+        run: printf "n\nandroid\nandroid\n" | bubblewrap build --skipPwaValidation
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
