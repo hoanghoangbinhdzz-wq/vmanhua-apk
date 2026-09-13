@@ -35,58 +35,58 @@ jobs:
             -dname "CN=VManhua,O=VManhua,C=VN" \
             -storepass android -keypass android
 
-      - name: Patch signing key in manifest
+      - name: Patch manifest
         run: |
           python3 - << 'EOF'
           import json, os
+          ks = os.environ['GITHUB_WORKSPACE'] + '/android.keystore'
           with open('twa-manifest.json') as f:
               m = json.load(f)
-          m['signingKey'] = {
-              'path': os.environ['GITHUB_WORKSPACE'] + '/android.keystore',
-              'alias': 'android'
-          }
+          m['signingKey'] = {'path': ks, 'alias': 'android'}
+          # bubblewrap mới dùng startUrl, file cũ dùng launchUrl
+          if 'startUrl' not in m:
+              m['startUrl'] = m.get('launchUrl', '/')
           with open('twa-manifest.json', 'w') as f:
               json.dump(m, f, indent=2)
-          print('signingKey patched:', m['signingKey'])
+          print('host:', m.get('host'))
+          print('startUrl:', m.get('startUrl'))
+          print('signingKey:', m.get('signingKey'))
           EOF
 
       - name: Write build script
         run: |
           cat > build.py << 'PYEOF'
           import pexpect, sys, os
-
           KS = os.environ['GITHUB_WORKSPACE'] + '/android.keystore'
-
           child = pexpect.spawn(
-              'bubblewrap build --skipPwaValidation',
-              timeout=300, encoding='utf-8'
+            'bubblewrap build --skipPwaValidation',
+            timeout=300, encoding='utf-8'
           )
           child.logfile = sys.stdout
-
-          PATTERNS = [
-              'regenerate',          # 0
-              r'\[Y/n\]',            # 1
-              r'\(Y/n\)',            # 2
-              'Key Store Location',  # 3
-              'Key Store Password',  # 4
-              'Key Alias',           # 5
-              'Key Password',        # 6
-              pexpect.EOF,           # 7
-              pexpect.TIMEOUT,       # 8
+          P = [
+            'regenerate',
+            r'\[Y/n\]',
+            r'\(Y/n\)',
+            'Key Store Location',
+            'Key Store Password',
+            'Key Alias',
+            'Key Password',
+            pexpect.EOF,
+            pexpect.TIMEOUT,
           ]
-
           while True:
-              i = child.expect(PATTERNS, timeout=300)
-              print(f'\n[match:{i}]\n', flush=True)
-              if   i == 0:      child.sendline('y')
-              elif i in (1, 2): child.sendline('y')
-              elif i == 3:      child.sendline(KS)
-              elif i == 4:      child.sendline('android')
-              elif i == 5:      child.sendline('android')
-              elif i == 6:      child.sendline('android')
-              elif i == 7:      break
-              elif i == 8:      child.terminate(force=True); break
-
+            i = child.expect(P, timeout=300)
+            print(f'\n[match:{i}]\n', flush=True)
+            if   i == 0: child.sendline('y')
+            elif i in (1, 2): child.sendline('y')
+            elif i == 3: child.sendline(KS)
+            elif i == 4: child.sendline('android')
+            elif i == 5: child.sendline('android')
+            elif i == 6: child.sendline('android')
+            elif i == 7: break
+            elif i == 8:
+              child.terminate(force=True)
+              break
           child.close()
           sys.exit(child.exitstatus or 0)
           PYEOF
