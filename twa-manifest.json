@@ -13,5 +13,6 @@
   "signingKey": {"path": "android.keystore", "alias": "android"},
   "webManifestUrl": "https://farming-along-twiki-generates.trycloudflare.com/static/manifest.json",
   "minSdkVersion": 19,
+  "enableNotifications": false,
   "fingerprints": []
 }
