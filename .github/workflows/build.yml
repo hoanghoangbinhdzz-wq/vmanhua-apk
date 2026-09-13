@@ -23,7 +23,7 @@ jobs:
         run: npm install -g @bubblewrap/cli
 
       - name: Build APK
-        run: printf "N\n${JAVA_HOME}\n" | bubblewrap build --skipPwaValidation
+        run: printf "N\nN\nN\n${JAVA_HOME}\n" | bubblewrap build --skipPwaValidation
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
