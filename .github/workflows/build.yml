@@ -53,11 +53,11 @@ jobs:
             | grep "SHA256:" | sed 's/.*SHA256:/SHA256:/'
           echo "══════════════════════════════════════"
 
-      - name: Prepare icon + patch manifest
+      - name: Setup local PWA server + patch manifest
         run: |
           mkdir -p /tmp/iconserver
 
-          # Lấy icon URL gốc từ manifest (ưu tiên iconUrl top-level)
+          # ── 1. Tải icon thật hoặc tạo placeholder ──
           ICON_URL=$(python3 -c "
           import json
           with open('twa-manifest.json') as f:
@@ -70,11 +70,10 @@ jobs:
 
           echo "Icon URL gốc: $ICON_URL"
 
-          # Thử tải icon thật, nếu không được thì tạo placeholder
           if [ -n "$ICON_URL" ] && curl -sf --connect-timeout 8 --max-time 15 "$ICON_URL" -o /tmp/iconserver/icon-512.png 2>/dev/null; then
             echo "Icon tải thành công"
           else
-            echo "Tunnel offline — tạo icon placeholder 512x512..."
+            echo "Tạo icon placeholder 512x512..."
             python3 -c "
           import struct, zlib
           def make_png(w, h, r, g, b):
@@ -92,24 +91,58 @@ jobs:
           "
           fi
 
-          # Khởi động HTTP server local
-          cd /tmp/iconserver && python3 -m http.server 8899 &
-          sleep 2
-          echo "Icon server: $(curl -s -o /dev/null -w '%{http_code}' http://localhost:8899/icon-512.png)"
-
-          # Patch toàn bộ manifest
+          # ── 2. Tạo manifest.json từ dữ liệu trong twa-manifest ──
           python3 - << 'EOF'
-          import json, os
-          ks   = os.environ['GITHUB_WORKSPACE'] + '/android.keystore'
-          host = os.environ.get('TUNNEL_URL', 'placeholder.trycloudflare.com')
-          LOCAL_ICON = 'http://localhost:8899/icon-512.png'
+          import json
 
           with open('twa-manifest.json') as f:
               m = json.load(f)
 
-          # Patch host / URLs
+          web_manifest = {
+              "name":             m.get('name', 'VManhua'),
+              "short_name":       m.get('shortName', m.get('name', 'VManhua')),
+              "start_url":        m.get('startUrl', '/'),
+              "display":          "standalone",
+              "theme_color":      m.get('themeColor', '#1e1e2e'),
+              "background_color": m.get('backgroundColor', '#1e1e2e'),
+              "icons": [
+                  {
+                      "src": "http://localhost:8899/icon-512.png",
+                      "sizes": "512x512",
+                      "type": "image/png",
+                      "purpose": "any maskable"
+                  }
+              ]
+          }
+
+          with open('/tmp/iconserver/manifest.json', 'w') as f:
+              json.dump(web_manifest, f, indent=2)
+
+          print("Web manifest created:")
+          print(json.dumps(web_manifest, indent=2))
+          EOF
+
+          # ── 3. Khởi động local HTTP server ──
+          cd /tmp/iconserver && python3 -m http.server 8899 &
+          sleep 2
+          echo "=== Kiểm tra local server ==="
+          curl -s -o /dev/null -w "icon: %{http_code}\n"    http://localhost:8899/icon-512.png
+          curl -s -o /dev/null -w "manifest: %{http_code}\n" http://localhost:8899/manifest.json
+
+          # ── 4. Patch toàn bộ twa-manifest.json ──
+          python3 - << 'EOF'
+          import json, os
+
+          ks   = os.environ['GITHUB_WORKSPACE'] + '/android.keystore'
+          host = os.environ.get('TUNNEL_URL', 'placeholder.trycloudflare.com')
+          LOCAL_ICON     = 'http://localhost:8899/icon-512.png'
+          LOCAL_MANIFEST = 'http://localhost:8899/manifest.json'
+
+          with open('twa-manifest.json') as f:
+              m = json.load(f)
+
+          # Host / URL chính (dùng cho TWA intent filter)
           m['host']           = host
-          m['webManifestUrl'] = f'https://{host}/manifest.json'
           m['fullScopeUrl']   = f'https://{host}/'
           m['signingKey']     = {'path': ks, 'alias': 'android'}
           m['appVersionCode'] = 1
@@ -117,10 +150,12 @@ jobs:
           if 'startUrl' not in m:
               m['startUrl'] = m.get('launchUrl', '/')
 
-          # Patch TẤT CẢ icon fields (top-level + array)
+          # webManifestUrl → localhost (tránh ENOTFOUND khi build)
+          m['webManifestUrl'] = LOCAL_MANIFEST
+
+          # Patch TẤT CẢ icon fields
           for key in ['iconUrl', 'maskableIconUrl', 'monochromeIconUrl']:
               if key in m:
-                  print(f"Patching {key}: {m[key]} -> {LOCAL_ICON}")
                   m[key] = LOCAL_ICON
 
           for icon in m.get('icons', []):
@@ -133,9 +168,10 @@ jobs:
           with open('twa-manifest.json', 'w') as f:
               json.dump(m, f, indent=2)
 
-          print(f"host: {host}")
-          print(f"startUrl: {m['startUrl']}")
-          print(f"All icon URLs patched to: {LOCAL_ICON}")
+          print(f"host:           {host}")
+          print(f"webManifestUrl: {LOCAL_MANIFEST}")
+          print(f"iconUrl:        {LOCAL_ICON}")
+          print("Patch hoàn tất")
           EOF
 
       - name: Write build script
