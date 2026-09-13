@@ -141,7 +141,6 @@ jobs:
           with open('twa-manifest.json') as f:
               m = json.load(f)
 
-          # Host / URL chính (dùng cho TWA intent filter)
           m['host']           = host
           m['fullScopeUrl']   = f'https://{host}/'
           m['signingKey']     = {'path': ks, 'alias': 'android'}
@@ -150,10 +149,8 @@ jobs:
           if 'startUrl' not in m:
               m['startUrl'] = m.get('launchUrl', '/')
 
-          # webManifestUrl → localhost (tránh ENOTFOUND khi build)
           m['webManifestUrl'] = LOCAL_MANIFEST
 
-          # Patch TẤT CẢ icon fields
           for key in ['iconUrl', 'maskableIconUrl', 'monochromeIconUrl']:
               if key in m:
                   m[key] = LOCAL_ICON
@@ -193,7 +190,7 @@ jobs:
               r'\(Y/n\)',
               r'\(y/N\)',
               'Key Store Location',
-              'Key Store Password',
+              'Password for the Key Store',   # FIX: was 'Key Store Password'
               'Key Alias',
               'Key Password',
               r'[Vv]ersion[Nn]ame',
