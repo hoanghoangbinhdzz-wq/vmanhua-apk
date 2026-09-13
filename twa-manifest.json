@@ -1,17 +1,17 @@
 {
   "packageId": "com.vmanhua.app",
-  "host": "c83ab48eabfa07.lhr.life",
+  "host": "farming-along-twiki-generates.trycloudflare.com",
   "name": "VManhua",
   "launchUrl": "/",
   "themeColor": "#6c63ff",
   "navigationColor": "#000000",
   "backgroundColor": "#1a1a2e",
-  "iconUrl": "https://c83ab48eabfa07.lhr.life/static/icon-512.png",
-  "maskableIconUrl": "https://c83ab48eabfa07.lhr.life/static/icon-512.png",
+  "iconUrl": "https://farming-along-twiki-generates.trycloudflare.com/static/icon-512.png",
+  "maskableIconUrl": "https://farming-along-twiki-generates.trycloudflare.com/static/icon-512.png",
   "appVersion": "1.0.0",
   "appVersionCode": 1,
   "signingKey": {"path": "android.keystore", "alias": "android"},
-  "webManifestUrl": "https://c83ab48eabfa07.lhr.life/static/manifest.json",
+  "webManifestUrl": "https://farming-along-twiki-generates.trycloudflare.com/static/manifest.json",
   "minSdkVersion": 19,
   "fingerprints": []
 }
