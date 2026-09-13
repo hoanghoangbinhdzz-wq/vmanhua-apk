@@ -28,22 +28,68 @@ jobs:
           printf '{"jdkPath":"%s","androidSdkPath":"%s"}\n' "$JAVA_HOME" "$ANDROID_SDK_ROOT" > ~/.bubblewrap/config.json
 
       - name: Generate Keystore
-        run: keytool -genkeypair -v -keystore android.keystore -alias android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=VManhua,O=VManhua,C=VN" -storepass android -keypass android
+        run: |
+          keytool -genkeypair -v \
+            -keystore "$GITHUB_WORKSPACE/android.keystore" \
+            -alias android -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=VManhua,O=VManhua,C=VN" \
+            -storepass android -keypass android
+
+      - name: Patch signing key in manifest
+        run: |
+          python3 - << 'EOF'
+          import json, os
+          with open('twa-manifest.json') as f:
+              m = json.load(f)
+          m['signingKey'] = {
+              'path': os.environ['GITHUB_WORKSPACE'] + '/android.keystore',
+              'alias': 'android'
+          }
+          with open('twa-manifest.json', 'w') as f:
+              json.dump(m, f, indent=2)
+          print('signingKey patched:', m['signingKey'])
+          EOF
 
       - name: Write build script
         run: |
-          cat > build.py << 'PY'
-          import pexpect, sys
-          c = pexpect.spawn('bubblewrap build --skipPwaValidation', timeout=300)
-          c.logfile = sys.stdout.buffer
+          cat > build.py << 'PYEOF'
+          import pexpect, sys, os
+
+          KS = os.environ['GITHUB_WORKSPACE'] + '/android.keystore'
+
+          child = pexpect.spawn(
+              'bubblewrap build --skipPwaValidation',
+              timeout=300, encoding='utf-8'
+          )
+          child.logfile = sys.stdout
+
+          PATTERNS = [
+              'regenerate',          # 0
+              r'\[Y/n\]',            # 1
+              r'\(Y/n\)',            # 2
+              'Key Store Location',  # 3
+              'Key Store Password',  # 4
+              'Key Alias',           # 5
+              'Key Password',        # 6
+              pexpect.EOF,           # 7
+              pexpect.TIMEOUT,       # 8
+          ]
+
           while True:
-              i = c.expect(['regenerate your project', r'\(Y/n\)', 'Key Store:', 'alias android', pexpect.EOF], timeout=300)
-              if i == 0: c.sendline('y')
-              elif i == 1: c.sendline('n')
-              elif i == 2: c.sendline('android')
-              elif i == 3: c.sendline('android')
-              else: break
-          PY
+              i = child.expect(PATTERNS, timeout=300)
+              print(f'\n[match:{i}]\n', flush=True)
+              if   i == 0:      child.sendline('y')
+              elif i in (1, 2): child.sendline('y')
+              elif i == 3:      child.sendline(KS)
+              elif i == 4:      child.sendline('android')
+              elif i == 5:      child.sendline('android')
+              elif i == 6:      child.sendline('android')
+              elif i == 7:      break
+              elif i == 8:      child.terminate(force=True); break
+
+          child.close()
+          sys.exit(child.exitstatus or 0)
+          PYEOF
 
       - name: Build APK
         run: |
@@ -51,7 +97,7 @@ jobs:
           python3 build.py
 
       - name: Find APK
-        run: find . -name "*.apk" 2>/dev/null
+        run: find . -name "*.apk" 2>/dev/null || echo "No APK found"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
