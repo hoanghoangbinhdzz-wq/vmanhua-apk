@@ -25,16 +25,36 @@ jobs:
       - name: Configure Bubblewrap
         run: |
           mkdir -p ~/.bubblewrap
-          printf '{"jdkPath":"%s","androidSdkPath":"%s"}\n' \
-            "$JAVA_HOME" "$ANDROID_SDK_ROOT" > ~/.bubblewrap/config.json
+          printf '{"jdkPath":"%s","androidSdkPath":"%s"}\n' "$JAVA_HOME" "$ANDROID_SDK_ROOT" > ~/.bubblewrap/config.json
 
       - name: Generate Keystore
         run: |
-          keytool -genkeypair -v \
-            -keystore android.keystore \
-            -alias android \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=VManhua,O=VManhua,C=VN" \
+          keytool -genkeypair -v -keystore android.keystore -alias android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=VManhua,O=VManhua,C=VN" -storepass android -keypass android
+
+      - name: Build APK
+        run: |
+          pip install pexpect --break-system-packages
+          python3 -c "
+          import pexpect, sys
+          c = pexpect.spawn('bubblewrap build --skipPwaValidation', timeout=300)
+          c.logfile = sys.stdout.buffer
+          while True:
+            i = c.expect(['regenerate your project', r'\(Y/n\)', 'Key Store:', 'alias android', pexpect.EOF], timeout=300)
+            if i == 0: c.sendline('y')
+            elif i == 1: c.sendline('n')
+            elif i == 2: c.sendline('android')
+            elif i == 3: c.sendline('android')
+            else: break
+          "
+
+      - name: Find APK
+        run: find . -name "*.apk" 2>/dev/null
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: vmanhua-apk
+          path: "**/*.apk"            -dname "CN=VManhua,O=VManhua,C=VN" \
             -storepass android \
             -keypass android
 
