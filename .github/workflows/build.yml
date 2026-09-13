@@ -45,6 +45,32 @@ jobs:
           set timeout 300
           spawn bubblewrap build --skipPwaValidation
           expect {
+            "regenerate your project" { send "y\r"; exp_continue }
+            -re "(Y/n)" { send "n\r"; exp_continue }
+            "Password for the Key Store:" { send "android\r"; exp_continue }
+            "Password for alias" { send "android\r"; exp_continue }
+            eof
+          }
+          EXPECT
+
+      - name: Find APK
+        run: find . -name "*.apk" 2>/dev/null
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: vmanhua-apk
+          path: "**/*.apk"            -dname "CN=VManhua,O=VManhua,C=VN" \
+            -storepass android \
+            -keypass android
+
+      - name: Build APK
+        run: |
+          sudo apt-get install -y expect
+          expect << 'EXPECT'
+          set timeout 300
+          spawn bubblewrap build --skipPwaValidation
+          expect {
             -re "(Y/n)" { send "n\r"; exp_continue }
             "Password for the Key Store:" { send "android\r"; exp_continue }
             "Password for alias" { send "android\r"; exp_continue }
